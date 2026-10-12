@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>악보 변환기</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&family=Noto+Serif+KR:wght@400;600&family=Tinos:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <header class="topbar">
+    <div class="brand">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18V5l12-2v13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="6" cy="18" r="3" fill="currentColor"/><circle cx="18" cy="16" r="3" fill="currentColor"/></svg>
+      <span>악보 변환기</span>
+    </div>
+    <div class="topbar-actions">
+      <button class="ghost" id="btnLoadJson" title="저장해 둔 악보 JSON 불러오기">불러오기</button>
+      <button class="ghost" id="btnSample">샘플 보기</button>
+      <button class="icon" id="btnSettings" aria-label="설정" title="설정">
+        <svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- 1단계: 업로드 -->
+  <section id="stepUpload" class="card">
+    <h2><span class="num">1</span>악보 이미지 올리기</h2>
+    <label class="drop" id="drop">
+      <input type="file" id="fileInput" accept="image/*,application/pdf" multiple hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0-4 4m4-4 4 4M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <strong>사진이나 스캔 파일을 선택하세요</strong>
+      <span>여러 페이지면 순서대로 여러 장 (최대 6장) · JPG, PNG, PDF</span>
+    </label>
+    <div id="thumbs" class="thumbs"></div>
+
+    <div class="hints">
+      <label>곡 제목<input id="hintTitle" placeholder="예: 은혜"></label>
+      <label>조
+        <select id="hintKey"><option value="">자동으로 읽기</option></select>
+      </label>
+      <label>박자
+        <select id="hintTime">
+          <option value="">자동으로 읽기</option>
+          <option>4/4</option><option>3/4</option><option>6/8</option><option>2/4</option><option>12/8</option><option>2/2</option>
+        </select>
+      </label>
+      <label>가사
+        <select id="hintLang">
+          <option value="한국어">한국어</option>
+          <option value="영어">영어</option>
+          <option value="한국어와 영어">한국어 + 영어</option>
+          <option value="가사 없음">가사 없음</option>
+        </select>
+      </label>
+    </div>
+    <button class="primary big" id="btnConvert" disabled>변환하기</button>
+    <p class="fine">악보는 Gemini가 읽습니다. 인식이 틀린 부분은 다음 단계에서 음표를 눌러 고칠 수 있어요.</p>
+  </section>
+
+  <!-- 2단계: 확인 및 수정 -->
+  <section id="stepEdit" class="card" hidden>
+    <div class="edit-head">
+      <h2><span class="num">2</span>확인하고 고치기</h2>
+      <div class="edit-tools">
+        <button class="ghost" id="btnUndo" disabled>되돌리기</button>
+        <button class="ghost" id="btnToggleOrig">원본 보기</button>
+      </div>
+    </div>
+
+    <div class="meta-row">
+      <label>제목<input id="fTitle"></label>
+      <label>작사<input id="fLyricist"></label>
+      <label>작곡<input id="fComposer"></label>
+      <label class="narrow">템포<input id="fTempo" type="number" min="30" max="240"></label>
+    </div>
+
+    <div class="tool-row">
+      <div class="seg">
+        <span class="seg-label">조옮김</span>
+        <span id="curKey" class="pill"></span>
+        <span aria-hidden="true">→</span>
+        <select id="transKey"></select>
+        <select id="transDir">
+          <option value="auto">가까운 쪽</option><option value="up">위로</option><option value="down">아래로</option>
+        </select>
+        <button class="ghost" id="btnTranspose">적용</button>
+      </div>
+      <div class="seg">
+        <span class="seg-label">악보 크기</span>
+        <input type="range" id="zoom" min="28" max="70" value="45">
+      </div>
+      <div class="seg">
+        <span class="seg-label">가사 크기</span>
+        <input type="range" id="lyricSize" min="3.5" max="8" step="0.5" value="5">
+      </div>
+    </div>
+
+    <div id="issues" class="issues" hidden></div>
+
+    <div class="workspace">
+      <div id="origPane" class="orig-pane" hidden></div>
+      <div class="score-wrap">
+        <div id="score" class="score" aria-label="악보 미리보기"></div>
+        <p class="fine center">음표를 누르면 수정할 수 있어요. 키보드 ← → 로 이동, ↑ ↓ 로 반음 조정.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3단계: 저장 -->
+  <section id="stepExport" class="card" hidden>
+    <h2><span class="num">3</span>저장하기</h2>
+    <div class="export-row">
+      <label class="inline">용지
+        <select id="paper"><option value="letter">Letter</option><option value="a4">A4</option></select>
+      </label>
+      <button class="primary" id="btnPdf">PDF 저장 / 인쇄</button>
+      <button class="ghost" id="btnMidi">MIDI</button>
+      <button class="ghost" id="btnXml" title="MuseScore에서 열 수 있습니다">MusicXML (MuseScore)</button>
+      <button class="ghost" id="btnJson">악보 JSON</button>
+      <button class="ghost" id="btnDrive">드라이브에 저장</button>
+    </div>
+    <p class="fine">PDF는 인쇄 창에서 <b>"PDF로 저장"</b>을 고르면 됩니다. 글자와 음표가 벡터로 저장되어 확대해도 선명합니다.</p>
+    <div id="driveResult" class="fine"></div>
+  </section>
+</div>
+
+<!-- 음표 수정 패널 -->
+<aside id="editor" class="editor" hidden>
+  <div class="editor-head">
+    <button class="icon" id="edPrev" aria-label="이전 음표">‹</button>
+    <strong id="edTitle">음표</strong>
+    <button class="icon" id="edNext" aria-label="다음 음표">›</button>
+    <button class="icon close" id="edClose" aria-label="닫기">×</button>
+  </div>
+  <div class="editor-body">
+    <div class="ed-row">
+      <label>음높이<input id="edPitch" placeholder="G4"></label>
+      <div class="btn-col">
+        <button class="mini" data-shift="1">반음 ▲</button>
+        <button class="mini" data-shift="-1">반음 ▼</button>
+      </div>
+      <div class="btn-col">
+        <button class="mini" data-shift="12">옥타브 ▲</button>
+        <button class="mini" data-shift="-12">옥타브 ▼</button>
+      </div>
+      <label class="check"><input type="checkbox" id="edRest">쉼표</label>
+    </div>
+    <div class="ed-row">
+      <label>길이
+        <select id="edDur">
+          <option value="whole">온음표</option><option value="half">2분음표</option>
+          <option value="quarter">4분음표</option><option value="eighth">8분음표</option>
+          <option value="16th">16분음표</option><option value="32nd">32분음표</option>
+        </select>
+      </label>
+      <label>점<select id="edDots"><option value="0">없음</option><option value="1">점 1개</option><option value="2">점 2개</option></select></label>
+      <label class="check"><input type="checkbox" id="edTriplet">셋잇단</label>
+      <label>붙임줄<select id="edTie"><option value="">없음</option><option value="start">시작</option><option value="stop">끝</option><option value="both">양쪽</option></select></label>
+    </div>
+    <div class="ed-row">
+      <label>코드<input id="edChord" placeholder="예: G, Em7, D/F#"></label>
+    </div>
+    <div id="edLyrics" class="ed-lyrics"></div>
+    <div class="ed-row wrap">
+      <button class="mini" id="edAddVerse">+ 절 추가</button>
+      <button class="mini" id="edInsBefore">앞에 음표 추가</button>
+      <button class="mini" id="edInsAfter">뒤에 음표 추가</button>
+      <button class="mini" id="edSplit" title="이 음표부터 새 마디로 나눕니다">여기서 마디 나누기</button>
+      <button class="mini" id="edMerge" title="이 마디를 앞 마디와 합칩니다">앞 마디와 합치기</button>
+      <button class="mini danger" id="edDelete">음표 삭제</button>
+    </div>
+  </div>
+</aside>
+
+<!-- 설정 -->
+<dialog id="settings">
+  <form method="dialog" class="dlg">
+    <h3>연결 설정</h3>
+    <label>Apps Script 웹 앱 주소<input id="setUrl" placeholder="https://script.google.com/macros/s/.../exec"></label>
+    <label>접속 암호 (APP_KEY)<input id="setKey" type="password"></label>
+    <p class="fine">이 기기의 브라우저에만 저장됩니다.</p>
+    <div class="dlg-actions">
+      <span id="setStatus" class="fine"></span>
+      <button type="button" class="ghost" id="btnPing">연결 확인</button>
+      <button class="primary" id="btnSaveSettings" value="save">저장</button>
+    </div>
+  </form>
+</dialog>
+
+<input type="file" id="jsonInput" accept=".json,application/json" hidden>
+<div id="busy" class="busy" hidden><div class="spinner"></div><p id="busyMsg">악보를 읽는 중…</p></div>
+<div id="toast" class="toast" hidden></div>
+<div id="printArea" class="print-area"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/verovio@6.3.0/dist/verovio-toolkit-wasm.js" defer></script>
+<script src="score-model.js" defer></script>
+<script src="app.js" defer></script>
+</body>
+</html>

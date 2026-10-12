@@ -1,0 +1,43 @@
+{
+  "title": "Amazing Grace",
+  "composer": "American folk melody (New Britain)",
+  "lyricist": "John Newton",
+  "key": "G",
+  "time": "3/4",
+  "tempo": 72,
+  "clef": "treble",
+  "measures": [
+    { "pickup": true, "notes": [
+      { "pitch": "D4", "duration": "quarter", "lyrics": [{ "verse": 1, "text": "A", "syllabic": "begin" }] }
+    ]},
+    { "notes": [
+      { "pitch": "G4", "duration": "half", "chord": "G", "lyrics": [{ "verse": 1, "text": "maz", "syllabic": "middle" }] },
+      { "pitch": "B4", "duration": "eighth", "lyrics": [{ "verse": 1, "text": "ing", "syllabic": "end" }] },
+      { "pitch": "G4", "duration": "eighth" }
+    ]},
+    { "notes": [
+      { "pitch": "B4", "duration": "half", "chord": "G", "lyrics": [{ "verse": 1, "text": "grace", "syllabic": "single" }] },
+      { "pitch": "A4", "duration": "quarter", "lyrics": [{ "verse": 1, "text": "how", "syllabic": "single" }] }
+    ]},
+    { "notes": [
+      { "pitch": "G4", "duration": "half", "chord": "C", "lyrics": [{ "verse": 1, "text": "sweet", "syllabic": "single" }] },
+      { "pitch": "E4", "duration": "quarter", "lyrics": [{ "verse": 1, "text": "the", "syllabic": "single" }] }
+    ]},
+    { "notes": [
+      { "pitch": "D4", "duration": "half", "chord": "G", "lyrics": [{ "verse": 1, "text": "sound", "syllabic": "single" }] },
+      { "pitch": "D4", "duration": "quarter", "lyrics": [{ "verse": 1, "text": "that", "syllabic": "single" }] }
+    ]},
+    { "notes": [
+      { "pitch": "G4", "duration": "half", "chord": "G", "lyrics": [{ "verse": 1, "text": "saved", "syllabic": "single" }] },
+      { "pitch": "B4", "duration": "eighth", "lyrics": [{ "verse": 1, "text": "a", "syllabic": "single" }] },
+      { "pitch": "G4", "duration": "eighth" }
+    ]},
+    { "notes": [
+      { "pitch": "B4", "duration": "half", "chord": "Em", "lyrics": [{ "verse": 1, "text": "wretch", "syllabic": "single" }] },
+      { "pitch": "A4", "duration": "quarter", "lyrics": [{ "verse": 1, "text": "like", "syllabic": "single" }] }
+    ]},
+    { "notes": [
+      { "pitch": "D5", "duration": "half", "dots": 1, "chord": "D", "lyrics": [{ "verse": 1, "text": "me", "syllabic": "single" }] }
+    ]}
+  ]
+}
