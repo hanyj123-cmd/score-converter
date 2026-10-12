@@ -15,7 +15,8 @@
   };
 
   const state = {
-    uploads: [],        // {name, mimeType, data(base64), url}
+    uploads: [],        // 페이지: {name, page:{url,data,mimeType}, systems:[{url,data,mimeType}]}
+    layout: 'auto',     // 줄 나누기: 'original' | 'auto' | '2'…'6'
     score: null,        // 현재 악보 JSON
     undo: [],
     sel: -1,            // 선택한 음표 번호 (listEvents 기준)
@@ -73,79 +74,164 @@
     $('hintKey').insertAdjacentHTML('beforeend', keys.map((k) => '<option value="' + k + '">' + label(k) + '</option>').join(''));
   }
 
-  async function readFile(file) {
-    if (file.type === 'application/pdf') {
-      const buf = await file.arrayBuffer();
-      return { name: file.name, mimeType: 'application/pdf', data: bufToB64(buf), url: null };
-    }
-    // 사진은 긴 변 2400px JPEG 로 줄여서 보냄 (용량↓, 인식률 유지)
-    const bmp = await createImageBitmap(file);
-    const max = 2400;
-    const r = Math.min(1, max / Math.max(bmp.width, bmp.height));
-    const c = document.createElement('canvas');
-    c.width = Math.round(bmp.width * r); c.height = Math.round(bmp.height * r);
-    const g = c.getContext('2d');
-    g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
-    g.drawImage(bmp, 0, 0, c.width, c.height);
-    const url = c.toDataURL('image/jpeg', 0.9);
-    return { name: file.name.replace(/\.[^.]+$/, '') + '.jpg', mimeType: 'image/jpeg', data: url.split(',')[1], url };
-  }
-  function bufToB64(buf) {
-    let s = ''; const b = new Uint8Array(buf);
-    for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000));
-    return btoa(s);
-  }
-
   async function addFiles(files) {
     const list = Array.from(files).filter((f) => /^image\//.test(f.type) || f.type === 'application/pdf');
     if (!list.length) return;
-    busy(true, '이미지를 준비하는 중…');
+    busy(true, '악보를 준비하는 중…');
     try {
       for (const f of list) {
-        if (state.uploads.length >= 6) { toast('한 번에 6장까지 올릴 수 있어요.'); break; }
-        state.uploads.push(await readFile(f));
+        const room = 6 - state.uploads.length;
+        if (room <= 0) { toast('한 번에 6쪽까지 올릴 수 있어요.'); break; }
+        const pages = await window.StaffSplit.processFile(f, room);
+        pages.forEach((p) => state.uploads.push(p));
       }
     } catch (e) {
-      toast('이미지를 읽지 못했습니다: ' + e.message);
+      toast('파일을 읽지 못했습니다: ' + e.message, 6000);
     } finally { busy(false); }
     renderThumbs();
   }
 
   function renderThumbs() {
     $('thumbs').innerHTML = state.uploads.map((u, i) =>
-      '<div class="thumb">' + (u.url ? '<img src="' + u.url + '" alt="">' : '<span>PDF<br>' + u.name + '</span>') +
-      '<span class="order">' + (i + 1) + '</span><button class="x" data-i="' + i + '" aria-label="삭제">×</button></div>').join('');
+      '<div class="thumb"><img src="' + u.page.url + '" alt="">' +
+      '<span class="order">' + (i + 1) + '</span>' +
+      '<span class="lines' + (u.systems.length ? '' : ' warn') + '">' + (u.systems.length ? u.systems.length + '줄' : '줄 못 찾음') + '</span>' +
+      '<button class="x" data-i="' + i + '" aria-label="삭제">×</button></div>').join('');
     $('btnConvert').disabled = !state.uploads.length;
   }
 
+  /** 동시에 n개씩 실행, 실패하면 잠시 쉬었다가 다시 (최대 3번) */
+  async function runPool(jobs, n, worker, onDone) {
+    const results = new Array(jobs.length);
+    let next = 0, done = 0;
+    async function lane() {
+      while (next < jobs.length) {
+        const i = next++;
+        for (let attempt = 0; ; attempt++) {
+          try { results[i] = { ok: true, value: await worker(jobs[i]) }; break; }
+          catch (e) {
+            if (attempt >= 2) { results[i] = { ok: false, error: e.message }; break; }
+            const wait = /429|RESOURCE_EXHAUSTED|quota/i.test(e.message) ? 12000 : 3000;
+            await new Promise((r) => setTimeout(r, wait * (attempt + 1)));
+          }
+        }
+        done++; if (onDone) onDone(done, jobs.length);
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(n, jobs.length) }, lane));
+    return results;
+  }
+
+  function lineJobs(pages) {
+    const jobs = [];
+    let line = 1;
+    pages.forEach((p) => {
+      if (p.systems.length) {
+        p.systems.forEach((sys) => {
+          jobs.push({ lines: [{ line, mimeType: sys.mimeType, data: sys.data }] });
+          line++;
+        });
+      } else {
+        // 줄을 못 찾은 페이지(비뚤어진 사진 등)는 페이지 통째로
+        jobs.push({ whole: true, lines: [{ line, mimeType: p.page.mimeType, data: p.page.data }] });
+        line += 100; // 이 페이지 안 줄 번호는 Gemini 가 매김
+      }
+    });
+    return jobs;
+  }
+
   async function convert() {
-    busy(true, '악보를 읽는 중… (보통 20초~1분)');
+    const hints = {
+      title: $('hintTitle').value.trim(),
+      key: $('hintKey').value,
+      time: $('hintTime').value,
+      language: $('hintLang').value,
+    };
+    const pages = state.uploads;
+    const jobs = lineJobs(pages);
+    const lineCount = pages.reduce((a, p) => a + p.systems.length, 0);
+    busy(true, '곡 정보를 읽는 중…');
     try {
-      const hints = {
-        title: $('hintTitle').value.trim(),
-        key: $('hintKey').value,
-        time: $('hintTime').value,
-        language: $('hintLang').value,
-      };
-      const data = await api('transcribe', {
-        images: state.uploads.map((u) => ({ mimeType: u.mimeType, data: u.data })),
-        hints,
+      const meta = (await api('meta', { pages: pages.map((p) => p.page), lineCount, hints })).meta;
+      const key = hints.key || meta.key;
+      const time = hints.time || meta.time;
+      busy(true, '음표를 읽는 중… 0/' + jobs.length + '줄');
+      const results = await runPool(jobs, 4, async (job) =>
+        (await api('lines', Object.assign({ hints: { key, time, language: hints.language, pickup: meta.pickup } }, job))).result,
+        (d, t) => busy(true, '음표를 읽는 중… ' + d + '/' + t + '줄'));
+
+      const measures = [];
+      const warnings = [];
+      results.forEach((r, i) => {
+        const first = jobs[i].lines[0].line;
+        if (r.ok) {
+          (r.value.measures || []).forEach((m) => { if (m.line == null) m.line = first; measures.push(m); });
+          (r.value.warnings || []).forEach((w) => warnings.push(w));
+        } else {
+          measures.push({ line: first, failed: true, notes: [{ rest: true, duration: 'whole' }] });
+          warnings.push('줄 ' + first + '을(를) 읽지 못했습니다 (' + r.error + '). 그 줄의 음표를 눌러 "이 줄 다시 읽기"를 해 보세요.');
+        }
       });
-      const score = data.score;
-      if (hints.key) score.key = hints.key;
-      if (hints.time) score.time = hints.time;
-      if (hints.title) score.title = hints.title;
+      const score = {
+        title: hints.title || meta.title, composer: meta.composer, lyricist: meta.lyricist,
+        key, time, tempo: meta.tempo, clef: meta.clef || 'treble',
+        measures, warnings,
+      };
+      if (meta.pickup && measures[0]) measures[0].pickup = true;
+      (meta.sections || []).forEach((sec) => {
+        const m = measures.find((x) => x.line === sec.line);
+        if (m && !m.section) m.section = sec.label;
+      });
+      SM.resolvePositions(score);
+      score._model = meta._model;
+      state.layout = SM.hasLineInfo(score) ? 'original' : 'auto';
       setScore(score, true);
-      $('origPane').hidden = !state.uploads.some((u) => u.url);
+      $('origPane').hidden = false;
       $('stepEdit').scrollIntoView({ behavior: 'smooth' });
+      const failed = results.filter((r) => !r.ok).length;
+      if (failed) toast(failed + '줄을 읽지 못했습니다. 노란 상자를 확인하세요.', 6000);
     } catch (e) {
-      toast('변환 실패: ' + e.message, 6000);
+      toast('변환 실패: ' + e.message, 7000);
+    } finally { busy(false); }
+  }
+
+  /** 선택한 음표가 있는 줄만 Gemini 로 다시 읽기 */
+  async function rereadLine() {
+    const ev = state.events[state.sel];
+    if (!ev) return;
+    const line = state.score.measures[ev.mi].line;
+    const jobs = lineJobs(state.uploads);
+    const job = jobs.find((j) => !j.whole && j.lines[0].line === line);
+    if (!job) { toast('원본 이미지가 있어야 다시 읽을 수 있어요. (이 화면에서 변환한 악보만 가능)'); return; }
+    busy(true, line + '번째 줄을 다시 읽는 중…');
+    try {
+      const s = state.score;
+      const r = (await api('lines', Object.assign({ hints: { key: s.key, time: s.time, pickup: line === 1 && s.measures[0].pickup } }, job))).result;
+      const fresh = { key: s.key, clef: s.clef, measures: (r.measures || []).map((m) => Object.assign(m, { line })) };
+      SM.resolvePositions(fresh);
+      pushUndo();
+      const ms = s.measures;
+      const firstIdx = ms.findIndex((m) => m.line === line);
+      const count = ms.filter((m) => m.line === line).length;
+      const old = ms[firstIdx];
+      if (old.section && fresh.measures[0]) fresh.measures[0].section = old.section;
+      if (old.pickup && fresh.measures[0]) fresh.measures[0].pickup = true;
+      ms.splice(firstIdx, count, ...fresh.measures);
+      s.warnings = (s.warnings || []).filter((w) => !new RegExp('줄 ' + line + '\\b').test(w)).concat(r.warnings || []);
+      state.sel = state.events.findIndex((e2) => e2.mi === firstIdx);
+      await render();
+      openEditor(Math.max(0, state.events.findIndex((e2) => e2.mi === firstIdx)));
+      toast(line + '번째 줄을 다시 읽었습니다.');
+    } catch (e) {
+      toast('다시 읽기 실패: ' + e.message, 6000);
     } finally { busy(false); }
   }
 
   /* ───────────── 2단계: 미리보기와 수정 ───────────── */
   function setScore(score, fresh) {
     state.score = score;
+    if (fresh) state.layout = score.layout || (SM.hasLineInfo(score) ? 'original' : 'auto');
+    delete score.layout;
     if (fresh) { state.undo = []; state.sel = -1; closeEditor(); }
     $('stepEdit').hidden = false; $('stepExport').hidden = false;
     $('fTitle').value = score.title || '';
@@ -175,7 +261,7 @@
   }
 
   function renderOrig() {
-    $('origPane').innerHTML = state.uploads.filter((u) => u.url).map((u) => '<img src="' + u.url + '" alt="원본 악보">').join('');
+    $('origPane').innerHTML = state.uploads.map((u) => '<img src="' + u.page.url + '" alt="원본 악보">').join('');
   }
 
   function verovioOptions(extra) {
@@ -192,6 +278,35 @@
       svgViewBox: true,
       svgRemoveXlink: true,
     }, extra || {});
+  }
+
+  function verovioBreaks() { return state.layout === 'auto' ? 'auto' : 'line'; }
+
+  function syncLayoutSelect() {
+    const sel = $('layout');
+    const hasLines = SM.hasLineInfo(state.score);
+    sel.querySelector('option[value="original"]').disabled = !hasLines;
+    if (state.layout === 'original' && !hasLines) state.layout = 'auto';
+    sel.value = state.layout;
+  }
+
+  /** 이 마디에서 줄 바꾸기 / 앞 줄에 붙이기 (현재 보이는 줄 나누기를 기준으로) */
+  function toggleLineBreak(mi) {
+    if (mi <= 0) { toast('첫 마디는 항상 첫 줄에 있어요.'); return; }
+    pushUndo();
+    const ms = state.score.measures;
+    const cur = SM.systemBreaks(ms, state.layout === 'auto' ? 'auto' : state.layout);
+    if (state.layout === 'auto') {
+      // 자동 배치는 위치를 알 수 없으므로, 화면에 그려진 줄을 읽어 옴
+      const sys = Array.from($('score').querySelectorAll('g.system'));
+      const firstIds = sys.map((g) => { const m = g.querySelector('g.measure'); return m && m.id; });
+      const ids = Array.from($('score').querySelectorAll('g.measure')).map((g) => g.id);
+      ids.forEach((id, i) => { cur[i] = i > 0 && firstIds.includes(id); });
+    }
+    ms.forEach((m, i) => { if (i > 0) m.brk = cur[i]; });
+    ms[mi].brk = !cur[mi];
+    state.layout = 'original';
+    render().then(() => openEditor(state.sel));
   }
 
   function headHtml(score) {
@@ -213,9 +328,10 @@
     // 좁은 화면(휴대폰)에서는 한 줄에 최소한의 공간을 확보하도록 배율을 자동으로 낮춤
     const MIN_PAGE = 1500;
     const scale = Math.min(+$('zoom').value, (width * 100) / MIN_PAGE);
-    tk.setOptions(verovioOptions({ scale: scale, pageWidth: Math.round((width * 100) / scale), pageHeight: 60000 }));
+    tk.setOptions(verovioOptions({ scale: scale, pageWidth: Math.round((width * 100) / scale), pageHeight: 60000, breaks: verovioBreaks() }));
+    syncLayoutSelect();
     let xml;
-    try { xml = SM.toMusicXML(score); } catch (e) { box.innerHTML = '<p class="fine center">' + e.message + '</p>'; return; }
+    try { xml = SM.toMusicXML(score, { breaks: state.layout }); } catch (e) { box.innerHTML = '<p class="fine center">' + e.message + '</p>'; return; }
     tk.loadData(xml);
     let html = headHtml(score);
     for (let p = 1; p <= tk.getPageCount(); p++) html += tk.renderToSVG(p);
@@ -282,6 +398,9 @@
     $('edTie').value = n.tie || '';
     $('edChord').value = n.chord || '';
     renderLyricInputs(n);
+    const brks = SM.systemBreaks(state.score.measures, state.layout === 'auto' ? 'none' : state.layout);
+    $('edLineBreak').textContent = brks[ev.mi] ? '이 마디를 앞 줄에 붙이기' : '이 마디부터 새 줄';
+    $('edReread').hidden = !state.uploads.length || state.score.measures[ev.mi].line == null;
     $('editor').hidden = false;
     document.body.classList.add('editing');
     highlight();
@@ -342,22 +461,32 @@
   async function renderPrintPages() {
     const tk = await tkReady;
     const paper = PAPER[$('paper').value];
-    // 인쇄 배율: 화면 '악보 크기' 슬라이더를 종이 기준으로 환산
-    // 화면 슬라이더 45 ≈ 일반 악보 크기(오선 높이 약 7mm)
-    const scale = Math.round(+$('zoom').value * 2.2);
     const head = headHtml(state.score);
     const headMm = head ? 26 : 0;                 // 1쪽 머리글(제목·작사·작곡) 높이
     const svgH = paper.h - headMm * 10;
-    tk.setOptions(verovioOptions({
-      pageWidth: Math.round((paper.w * 100) / scale),
-      pageHeight: Math.round((svgH * 100) / scale),
-      adjustPageHeight: false,
-      pageMarginLeft: 120, pageMarginRight: 120, pageMarginTop: 110, pageMarginBottom: 110,
-      footer: 'none',
-    }));
-    tk.loadData(SM.toMusicXML(state.score));
+    const xml = SM.toMusicXML(state.score, { breaks: state.layout });
+    // 인쇄 배율: 화면 '악보 크기' 슬라이더 45 ≈ 일반 악보 크기(오선 높이 약 7mm)
+    let scale = Math.round(+$('zoom').value * 2.2);
+    const layout = (sc) => {
+      tk.setOptions(verovioOptions({
+        scale: sc,
+        pageWidth: Math.round((paper.w * 100) / sc),
+        pageHeight: Math.round((svgH * 100) / sc),
+        adjustPageHeight: false,
+        breaks: verovioBreaks(),
+        pageMarginLeft: 120, pageMarginRight: 120, pageMarginTop: 110, pageMarginBottom: 110,
+        footer: 'none',
+      }));
+      tk.loadData(xml);
+      return tk.getPageCount();
+    };
+    let pages = layout(scale);
+    // 한 장에 맞추기: 넘치면 조금씩 줄여서 다시 배치
+    if ($('fitOne').checked) {
+      while (pages > 1 && scale > 45) { scale = Math.round(scale * 0.92); pages = layout(scale); }
+    }
     let html = '';
-    for (let p = 1; p <= tk.getPageCount(); p++) {
+    for (let p = 1; p <= pages; p++) {
       html += '<div class="print-page" style="width:' + (paper.w / 10) + 'mm;height:' + (paper.h / 10) + 'mm">' +
         '<div class="print-head" style="height:' + headMm + 'mm">' + (p === 1 ? head : '') + '</div>' +
         '<div class="print-svg" style="height:' + (svgH / 10) + 'mm">' + tk.renderToSVG(p) + '</div></div>';
@@ -366,7 +495,8 @@
     if (!st) { st = document.createElement('style'); st.id = 'pageStyle'; document.head.appendChild(st); }
     st.textContent = '@page { size: ' + paper.css + '; margin: 0; }';
     $('printArea').innerHTML = html;
-    return tk.getPageCount();
+    if ($('fitOne').checked && pages > 1) toast('한 장에 다 들어가지 않아 ' + pages + '장이 됩니다.');
+    return pages;
   }
 
   async function exportPdf() {
@@ -405,6 +535,7 @@
   function cleanJson() {
     const s = JSON.parse(JSON.stringify(state.score));
     delete s._model;
+    s.layout = state.layout;
     return JSON.stringify(s, null, 2);
   }
 
@@ -418,7 +549,7 @@
         { name: name + '.json', mimeType: 'application/json', text: cleanJson() },
         { name: name + '.mid', mimeType: 'audio/midi', base64: await midiBase64() },
       ];
-      state.uploads.forEach((u, i) => files.push({ name: '원본 ' + (i + 1) + ' - ' + u.name, mimeType: u.mimeType, base64: u.data }));
+      state.uploads.forEach((u, i) => files.push({ name: '원본 ' + (i + 1) + ' - ' + u.name + '.jpg', mimeType: u.page.mimeType, base64: u.page.data }));
       const res = await api('save', { title: state.score.title, files });
       $('driveResult').innerHTML = '저장했습니다: <a href="' + res.folderUrl + '" target="_blank" rel="noopener">드라이브 폴더 열기</a>';
     } catch (e) {
@@ -500,7 +631,7 @@
     ['fTitle', 'fLyricist', 'fComposer', 'fTempo'].forEach((id) => $(id).addEventListener('change', () => { pushUndo(); syncMeta(); render(); }));
     $('btnUndo').addEventListener('click', undo);
     $('btnToggleOrig').addEventListener('click', () => {
-      if (!state.uploads.some((u) => u.url)) { toast('원본 이미지가 없습니다.'); return; }
+      if (!state.uploads.length) { toast('원본 이미지가 없습니다.'); return; }
       $('origPane').hidden = !$('origPane').hidden;
       render();
     });
@@ -514,6 +645,16 @@
     $('lyricSize').value = LS.get('lyricSize', '5');
     $('zoom').addEventListener('change', () => LS.set('zoom', $('zoom').value));
     $('lyricSize').addEventListener('change', () => LS.set('lyricSize', $('lyricSize').value));
+
+    $('layout').addEventListener('change', () => {
+      state.layout = $('layout').value;
+      if (state.layout !== 'original') state.score.measures.forEach((m) => { delete m.brk; });
+      render();
+    });
+    $('fitOne').checked = LS.get('fitOne', '1') === '1';
+    $('fitOne').addEventListener('change', () => LS.set('fitOne', $('fitOne').checked ? '1' : '0'));
+    $('edLineBreak').addEventListener('click', () => { const ev = state.events[state.sel]; if (ev) toggleLineBreak(ev.mi); });
+    $('edReread').addEventListener('click', rereadLine);
 
     $('btnTranspose').addEventListener('click', () => {
       const to = $('transKey').value;
@@ -571,7 +712,7 @@
       structural(() => {
         const ms = state.score.measures;
         const tail = ms[ev.mi].notes.splice(ev.ni);
-        ms.splice(ev.mi + 1, 0, { notes: tail, barline: ms[ev.mi].barline });
+        ms.splice(ev.mi + 1, 0, { notes: tail, barline: ms[ev.mi].barline, line: ms[ev.mi].line, ending: ms[ev.mi].ending });
         ms[ev.mi].barline = undefined;
       });
     });

@@ -18,6 +18,8 @@
  *       "notes": [
  *         {
  *           "pitch": "G4",    // 음이름+옥타브(C4 = 가운데 도). 쉼표는 "rest"
+ *                             // 또는 pitch 대신 오선 위치로: "pos": 0 (맨 아래 줄), "acc": "#" (보이는 임시표)
+ *                             //   → resolvePositions() 가 조표를 반영해 pitch 를 계산
  *           "duration": "quarter",  // whole | half | quarter | eighth | 16th | 32nd
  *           "dots": 0,        // 점 개수
  *           "triplet": false, // 셋잇단음표
@@ -28,7 +30,12 @@
  *           ]
  *         }
  *       ],
- *       "barline": null       // "final" | "double" | "repeat-start" | "repeat-end" | null
+ *       "barline": null,      // "final" | "double" | "repeat-start" | "repeat-end" | null
+ *       "repeatStart": false, "repeatEnd": false,  // 도돌이표 (barline 대신 써도 됨)
+ *       "ending": "1",        // 1·2번 괄호 안의 마디면 괄호 번호
+ *       "section": "V",       // 마디 위 구간 표시 (V, PC, C, Bridge …)
+ *       "line": 1,            // 원본 악보에서 몇 번째 줄(단)에 있는지
+ *       "brk": true           // (선택) 사용자가 직접 정한 줄 바꿈: true=여기서 새 줄, false=앞 줄에 붙임
  *     }
  *   ]
  * }
@@ -130,13 +137,19 @@
   }
 
   /** 코드 기호 "C#m7/G#" → MusicXML <harmony> */
-  function harmonyXml(sym) {
+  /** "Esus4 E7" 처럼 한 음표 위 여러 코드 → 음길이를 나눠 차례로 배치 */
+  function chordsXml(sym, dur) {
+    const parts = String(sym).trim().split(/\s+/).filter(Boolean);
+    return parts.map((p, i) => harmonyXml(p, i ? Math.round((dur * i) / parts.length) : 0)).join('');
+  }
+
+  function harmonyXml(sym, offset) {
     const s = String(sym).trim().replace(/♯/g, '#').replace(/♭/g, 'b');
     const m = s.match(/^([A-G])(#|b)?([^/]*)(?:\/([A-G])(#|b)?)?$/);
     if (!m) {
       // 해석이 안 되면 글자 그대로 표시
       return '<direction placement="above"><direction-type><words>' + esc(s) +
-        '</words></direction-type></direction>';
+        '</words></direction-type>' + (offset ? '<offset>' + offset + '</offset>' : '') + '</direction>';
     }
     const alt = (a) => (a === '#' ? 1 : a === 'b' ? -1 : 0);
     let x = '<harmony><root><root-step>' + m[1] + '</root-step>';
@@ -149,23 +162,105 @@
       if (m[5]) x += '<bass-alter>' + alt(m[5]) + '</bass-alter>';
       x += '</bass>';
     }
+    if (offset) x += '<offset>' + offset + '</offset>';
     return x + '</harmony>';
   }
 
   const ACC_NAME = { '-2': 'flat-flat', '-1': 'flat', 0: 'natural', 1: 'sharp', 2: 'double-sharp' };
 
-  function barlineXml(type, location) {
-    switch (type) {
-      case 'final': return '<barline location="right"><bar-style>light-heavy</bar-style></barline>';
-      case 'double': return '<barline location="right"><bar-style>light-light</bar-style></barline>';
-      case 'repeat-end': return '<barline location="right"><bar-style>light-heavy</bar-style><repeat direction="backward"/></barline>';
-      case 'repeat-start': return '<barline location="left"><bar-style>heavy-light</bar-style><repeat direction="forward"/></barline>';
-      default: return '';
+  function leftBarlineXml(repeatStart, ending) {
+    if (!repeatStart && !ending) return '';
+    return '<barline location="left">' + (repeatStart ? '<bar-style>heavy-light</bar-style>' : '') +
+      (ending ? '<ending number="' + esc(ending) + '" type="start">' + esc(ending) + '.</ending>' : '') +
+      (repeatStart ? '<repeat direction="forward"/>' : '') + '</barline>';
+  }
+
+  function rightBarlineXml(style, repeatEnd, endingStop) {
+    if (!style && !repeatEnd && !endingStop) return '';
+    const bs = repeatEnd || style === 'final' ? 'light-heavy' : style === 'double' ? 'light-light' : '';
+    return '<barline location="right">' + (bs ? '<bar-style>' + bs + '</bar-style>' : '') +
+      (endingStop ? '<ending number="' + esc(endingStop.number) + '" type="' + endingStop.type + '"/>' : '') +
+      (repeatEnd ? '<repeat direction="backward"/>' : '') + '</barline>';
+  }
+
+  /** 줄 나누기 위치 계산. breaks: 'original'(원본 줄) | 'auto' | 숫자(한 줄 마디 수) */
+  function systemBreaks(measures, breaks) {
+    const out = measures.map(() => false);
+    if (breaks === 'original') {
+      for (let i = 1; i < measures.length; i++) {
+        const m = measures[i];
+        if (m.brk != null) { out[i] = !!m.brk; continue; } // 사용자가 직접 정한 줄 바꿈
+        const a = measures[i - 1].line, b = m.line;
+        if (a != null && b != null && b !== a) out[i] = true;
+      }
+    } else if (+breaks > 0) {
+      const n = +breaks;
+      const first = measures[0] && measures[0].pickup ? 1 : 0; // 못갖춘마디는 첫 줄에 붙임
+      for (let i = first + 1; i < measures.length; i++) if ((i - first) % n === 0) out[i] = true;
     }
+    return out;
+  }
+
+  function hasLineInfo(score) {
+    const ms = score.measures || [];
+    if (ms.some((m) => m.brk != null)) return true;
+    return ms.length > 1 && ms.every((m) => m.line != null) && ms[ms.length - 1].line !== ms[0].line;
+  }
+
+  const BEAM_LEVEL = { eighth: 1, '16th': 2, '32nd': 3 };
+
+  /**
+   * 박자 단위로 8분·16분음표를 묶어 들보(beam) 정보를 계산.
+   * 4/4·3/4·2/4 는 4분음표 한 박, 6/8·9/8·12/8 은 점4분음표, 2/2 는 2분음표 단위.
+   * @returns 음표마다 [{number, value}] 배열
+   */
+  function computeBeams(notes, time) {
+    const compound = time.beatType === 8 && time.beats % 3 === 0 && time.beats > 3;
+    const beatLen = compound ? DIVISIONS * 1.5 : time.beatType === 2 ? DIVISIONS * 2 : DIVISIONS * (4 / time.beatType);
+    const out = notes.map(() => []);
+    const info = [];
+    let t = 0;
+    notes.forEach((n) => {
+      const dur = noteDivisions(n);
+      const lvl = parsePitch(n.pitch) ? (BEAM_LEVEL[normDuration(n.duration)] || 0) : 0;
+      const g = Math.floor(t / beatLen + 1e-9);
+      const fits = t + dur <= (g + 1) * beatLen + 1e-9;
+      info.push({ lvl: fits ? lvl : 0, g, dots: n.dots | 0 });
+      t += dur;
+    });
+    // 같은 박 안에서 연달아 나오는 들보 음표 묶음
+    let i = 0;
+    while (i < info.length) {
+      if (!info[i].lvl) { i++; continue; }
+      let j = i;
+      while (j + 1 < info.length && info[j + 1].lvl && info[j + 1].g === info[i].g) j++;
+      if (j > i) {
+        for (let k = i; k <= j; k++) out[k].push({ number: 1, value: k === i ? 'begin' : k === j ? 'end' : 'continue' });
+        for (let L = 2; L <= 3; L++) {
+          let k = i;
+          while (k <= j) {
+            if (info[k].lvl < L) { k++; continue; }
+            let e = k;
+            while (e + 1 <= j && info[e + 1].lvl >= L) e++;
+            if (e > k) {
+              for (let m = k; m <= e; m++) out[m].push({ number: L, value: m === k ? 'begin' : m === e ? 'end' : 'continue' });
+            } else {
+              // 혼자인 16분음표: 점음표 옆이면 그쪽으로 짧은 갈고리
+              const back = k > i && (k === j || info[k - 1].dots);
+              out[k].push({ number: L, value: back ? 'backward hook' : 'forward hook' });
+            }
+            k = e + 1;
+          }
+        }
+      }
+      i = j + 1;
+    }
+    return out;
   }
 
   /** 악보 JSON → MusicXML 문자열 */
-  function toMusicXML(score) {
+  function toMusicXML(score, opts) {
+    opts = opts || {};
     const key = parseKey(score.key);
     const time = parseTime(score.time);
     const clef = score.clef === 'bass' ? { sign: 'F', line: 4 } : { sign: 'G', line: 2 };
@@ -197,10 +292,21 @@
     x += '<part-list><score-part id="P1"><part-name print-object="no">' + esc(score.partName || 'Voice') +
       '</part-name></score-part></part-list>\n<part id="P1">\n';
 
+    const brk = systemBreaks(measures, opts.breaks);
+    let barNo = 0;
     measures.forEach((meas, mi) => {
-      const pickup = mi === 0 && meas.pickup;
-      x += '<measure number="' + (pickup ? 0 : mi + (measures[0] && measures[0].pickup ? 0 : 1)) + '"' +
+      const pickup = !!meas.pickup; // 못갖춘마디 (곡 중간 구간 시작에도 올 수 있음)
+      if (!pickup) barNo++;
+      x += '<measure number="' + (pickup ? 'p' + mi : barNo) + '"' +
         (pickup ? ' implicit="yes"' : '') + '>\n';
+      if (brk[mi]) x += '<print new-system="yes"/>\n';
+      const prev = measures[mi - 1], next = measures[mi + 1];
+      const ending = meas.ending ? String(meas.ending) : '';
+      const endingStart = ending && (!prev || String(prev.ending || '') !== ending);
+      const endingEnd = ending && (!next || String(next.ending || '') !== ending);
+      const repeatStart = meas.repeatStart || meas.barline === 'repeat-start';
+      const repeatEnd = meas.repeatEnd || meas.barline === 'repeat-end';
+      x += leftBarlineXml(repeatStart, endingStart ? ending : '');
       if (mi === 0) {
         x += '<attributes><divisions>' + DIVISIONS + '</divisions>' +
           '<key><fifths>' + key.fifths + '</fifths><mode>' + key.mode + '</mode></key>' +
@@ -212,15 +318,19 @@
             '<sound tempo="' + (+score.tempo) + '"/></direction>\n';
         }
       }
-      if (meas.barline === 'repeat-start') x += barlineXml('repeat-start') + '\n';
+      if (meas.section) {
+        x += '<direction placement="above"><direction-type><rehearsal>' + esc(meas.section) +
+          '</rehearsal></direction-type></direction>\n';
+      }
 
       const local = {}; // 이 마디 안에서 나온 임시표: "C4" → alter
       let tup = null;   // 진행 중인 셋잇단 묶음 {sum, target}
-      (meas.notes || []).forEach((n) => {
+      const beams = computeBeams(meas.notes || [], time);
+      (meas.notes || []).forEach((n, ni) => {
         const pt = parsePitch(n.pitch);
         const type = normDuration(n.duration);
         const dur = noteDivisions(n);
-        if (n.chord) x += harmonyXml(n.chord) + '\n';
+        if (n.chord) x += chordsXml(n.chord, dur) + '\n';
 
         x += '<note>';
         if (!pt) {
@@ -250,6 +360,7 @@
         if (n.triplet) {
           x += '<time-modification><actual-notes>3</actual-notes><normal-notes>2</normal-notes></time-modification>';
         }
+        beams[ni].forEach((b) => { x += '<beam number="' + b.number + '">' + b.value + '</beam>'; });
         let tupXml = '';
         if (n.triplet) {
           if (!tup) { tup = { sum: 0, target: dur * 3 }; tupXml = '<tuplet type="start" bracket="yes"/>'; }
@@ -273,8 +384,9 @@
       });
 
       const isLast = mi === measures.length - 1;
-      const bl = meas.barline || (isLast ? 'final' : null);
-      if (bl && bl !== 'repeat-start') x += barlineXml(bl) + '\n';
+      const style = ['final', 'double'].includes(meas.barline) ? meas.barline : (isLast ? 'final' : null);
+      const endingStop = endingEnd ? { number: ending, type: repeatEnd ? 'stop' : 'discontinue' } : null;
+      x += rightBarlineXml(style, repeatEnd, endingStop) + '\n';
       x += '</measure>\n';
     });
 
@@ -326,6 +438,8 @@
   }
 
   function transposeChord(sym, iv) {
+    const many = String(sym).trim().split(/\s+/);
+    if (many.length > 1) return many.map((c) => transposeChord(c, iv)).join(' ');
     const s = String(sym).trim().replace(/♯/g, '#').replace(/♭/g, 'b');
     const m = s.match(/^([A-G])(#|b)?([^/]*)(?:\/([A-G])(#|b)?)?$/);
     if (!m) return sym;
@@ -361,6 +475,43 @@
     return pitchToString(spellMidi(pitchToMidi(pt) + delta, delta > 0));
   }
 
+  /* ───────────── 오선 위치 → 음이름 ───────────── */
+  // 오선 맨 아래 줄의 음 (C0 = 0 기준 온음계 번호): 높은음자리 E4, 낮은음자리 G2
+  const BOTTOM_LINE = { treble: 4 * 7 + 2, bass: 2 * 7 + 4 };
+  const ACC_ALTER = { '#': 1, '♯': 1, 'b': -1, '♭': -1, 'n': 0, '♮': 0, natural: 0, sharp: 1, flat: -1, '##': 2, x: 2, bb: -2 };
+
+  /**
+   * pos(오선 위치)와 acc(눈에 보이는 임시표)만 있는 음표에 pitch 를 채움.
+   * 조표, 같은 마디 안의 앞선 임시표, 붙임줄로 넘어온 음까지 반영.
+   */
+  function resolvePositions(score) {
+    const kAlt = keyAlters(parseKey(score.key).fifths);
+    const base = BOTTOM_LINE[score.clef === 'bass' ? 'bass' : 'treble'];
+    let carry = null; // 붙임줄로 다음 마디에 이어지는 음
+    (score.measures || []).forEach((m) => {
+      const local = {};
+      (m.notes || []).forEach((n) => {
+        if (n.rest === true || /^(r|rest)$/i.test(String(n.pitch || ''))) {
+          n.pitch = 'rest'; delete n.pos; delete n.acc; delete n.rest; carry = null; return;
+        }
+        if (n.pos == null || n.pos === '') { carry = null; return; } // 이미 pitch 가 있는 음표
+        const d = base + Math.round(+n.pos);
+        const step = LETTERS[mod(d, 7)];
+        const octave = Math.floor(d / 7);
+        const slot = step + octave;
+        let alter;
+        if (n.acc != null && n.acc !== '' && String(n.acc) in ACC_ALTER) alter = ACC_ALTER[String(n.acc)];
+        else if ((n.tie === 'stop' || n.tie === 'both') && carry && carry.slot === slot) alter = carry.alter;
+        else alter = slot in local ? local[slot] : kAlt[step];
+        local[slot] = alter;
+        n.pitch = pitchToString({ step, alter, octave });
+        delete n.pos; delete n.acc;
+        carry = (n.tie === 'start' || n.tie === 'both') ? { slot, alter } : null;
+      });
+    });
+    return score;
+  }
+
   /** 미리보기에서 클릭한 음표를 JSON 위치로 찾기 위한 목록 (악보에 그려지는 순서와 동일) */
   function listEvents(score) {
     const out = [];
@@ -381,7 +532,8 @@
         try { parsePitch(n.pitch); } catch (e) { issues.push({ mi, ni, msg: e.message }); }
         try { total += noteDivisions(n); } catch (e) { issues.push({ mi, ni, msg: e.message }); }
       });
-      const isEdge = (mi === 0 && m.pickup) || mi === score.measures.length - 1;
+      const isEdge = m.pickup || m.ending || mi === score.measures.length - 1 ||
+        (score.measures[mi + 1] && score.measures[mi + 1].pickup); // 구간 끝(다음이 못갖춘마디)도 짧을 수 있음
       if (total !== full && !(isEdge && total < full)) {
         const beats = (total / DIVISIONS) * (time.beatType / 4);
         const label = score.measures[0] && score.measures[0].pickup ? mi : mi + 1;
@@ -394,6 +546,7 @@
 
   return {
     DIVISIONS, toMusicXML, listEvents, validate, transpose, transposeChord, shiftSemitone,
+    resolvePositions, hasLineInfo, systemBreaks,
     parsePitch, pitchToString, parseKey, normalizeKey, noteDivisions,
     MAJOR_KEYS: Object.keys(MAJOR_FIFTHS), MINOR_KEYS: Object.keys(MINOR_FIFTHS),
   };

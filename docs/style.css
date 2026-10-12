@@ -97,6 +97,11 @@ label.inline { flex-direction: row; align-items: center; gap: 8px; }
   position: absolute; top: 4px; left: 4px; background: var(--accent); color: var(--accent-ink);
   border-radius: 6px; font-size: 11px; padding: 0 6px;
 }
+.thumb .lines {
+  position: absolute; bottom: 4px; left: 4px; right: 4px; text-align: center;
+  background: rgba(47,93,80,.9); color: #fff; border-radius: 6px; font-size: 11px; padding: 1px 4px;
+}
+.thumb .lines.warn { background: rgba(154,91,0,.92); }
 .thumb .x {
   position: absolute; top: 2px; right: 2px; background: rgba(0,0,0,.55); color: #fff;
   border-radius: 50%; width: 22px; height: 22px; padding: 0; font-size: 14px; line-height: 22px;

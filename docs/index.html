@@ -32,7 +32,7 @@
       <input type="file" id="fileInput" accept="image/*,application/pdf" multiple hidden>
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0-4 4m4-4 4 4M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
       <strong>사진이나 스캔 파일을 선택하세요</strong>
-      <span>여러 페이지면 순서대로 여러 장 (최대 6장) · JPG, PNG, PDF</span>
+      <span>PDF 또는 사진 · 여러 페이지면 순서대로 (최대 6쪽)</span>
     </label>
     <div id="thumbs" class="thumbs"></div>
 
@@ -89,6 +89,18 @@
         <button class="ghost" id="btnTranspose">적용</button>
       </div>
       <div class="seg">
+        <span class="seg-label">줄 나누기</span>
+        <select id="layout">
+          <option value="original">원본과 같게</option>
+          <option value="auto">자동</option>
+          <option value="2">한 줄에 2마디</option>
+          <option value="3">한 줄에 3마디</option>
+          <option value="4">한 줄에 4마디</option>
+          <option value="5">한 줄에 5마디</option>
+          <option value="6">한 줄에 6마디</option>
+        </select>
+      </div>
+      <div class="seg">
         <span class="seg-label">악보 크기</span>
         <input type="range" id="zoom" min="28" max="70" value="45">
       </div>
@@ -116,6 +128,7 @@
       <label class="inline">용지
         <select id="paper"><option value="letter">Letter</option><option value="a4">A4</option></select>
       </label>
+      <label class="check"><input type="checkbox" id="fitOne" checked>한 장에 맞추기</label>
       <button class="primary" id="btnPdf">PDF 저장 / 인쇄</button>
       <button class="ghost" id="btnMidi">MIDI</button>
       <button class="ghost" id="btnXml" title="MuseScore에서 열 수 있습니다">MusicXML (MuseScore)</button>
@@ -170,6 +183,8 @@
       <button class="mini" id="edInsAfter">뒤에 음표 추가</button>
       <button class="mini" id="edSplit" title="이 음표부터 새 마디로 나눕니다">여기서 마디 나누기</button>
       <button class="mini" id="edMerge" title="이 마디를 앞 마디와 합칩니다">앞 마디와 합치기</button>
+      <button class="mini" id="edLineBreak">이 마디부터 새 줄</button>
+      <button class="mini" id="edReread" title="이 음표가 있는 줄만 Gemini 로 다시 읽습니다">이 줄 다시 읽기</button>
       <button class="mini danger" id="edDelete">음표 삭제</button>
     </div>
   </div>
@@ -197,6 +212,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/verovio@6.3.0/dist/verovio-toolkit-wasm.js" defer></script>
 <script src="score-model.js" defer></script>
+<script src="staff-split.js" defer></script>
 <script src="app.js" defer></script>
 </body>
 </html>
