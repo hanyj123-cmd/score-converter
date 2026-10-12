@@ -12,7 +12,8 @@
   --danger: #b42318;
   --sel: #d9480f;
   --radius: 14px;
-  --score-font: "Tinos", "Times New Roman", Times, "Noto Serif KR", serif;
+  /* 악보 글자: 돋움 (없는 기기에서는 모양이 비슷한 나눔고딕) */
+  --score-font: "Dotum", "돋움", "Nanum Gothic", "나눔고딕", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -146,8 +147,15 @@ input[type="range"] { padding: 0; accent-color: var(--accent); width: 120px; }
   padding: 8px 0; min-height: 200px; overflow-x: auto;
 }
 .score-head { padding: 14px 24px 2px; color: #111; font-family: var(--score-font); }
-.sh-title { text-align: center; font-size: 24px; font-weight: 600; letter-spacing: .01em; }
+.sh-title { text-align: center; font-size: 24px; font-weight: 700; letter-spacing: .01em; }
 .sh-sub { display: flex; justify-content: space-between; gap: 16px; font-size: 13px; margin-top: 6px; color: #333; }
+/* 가사: 한글은 Verovio 가 예상하는 글자 높이보다 커서 낮은 음표에 닿음.
+   자리는 크게 잡고(app.js) 82% 크기로 그린 뒤, '가사 간격' 만큼 아래로 내림 */
+.score g.verse text, .print-svg g.verse text {
+  transform-box: fill-box; transform-origin: 50% 88%; transform: scale(.82);
+}
+/* 단위는 악보 그림 좌표(오선 한 칸 ≈ 180) */
+.score g.verse, .print-svg g.verse { transform: translateY(var(--lyric-drop, 100px)); }
 .score svg { display: block; margin: 0 auto; max-width: 100%; height: auto; font-family: var(--score-font); }
 .score g.note, .score g.rest, .score g.mRest { cursor: pointer; }
 .score g.note:hover, .score g.rest:hover { color: var(--accent); fill: var(--accent); }

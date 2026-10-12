@@ -267,13 +267,16 @@
   function verovioOptions(extra) {
     return Object.assign({
       scale: +$('zoom').value,
-      lyricSize: +$('lyricSize').value,
+      // 한글은 라틴 대문자보다 키가 커서 음표에 닿기 쉬움 → 자리는 크게 잡고 82% 크기로 그림 (style.css)
+      lyricSize: +$('lyricSize').value / 0.82,
+      lyricTopMinMargin: 3,
+      spacingStaff: 12,
+      spacingSystem: 12 + +$('lyricGap').value * 1.2,   // 가사를 내린 만큼 줄 사이도 넓힘
       adjustPageHeight: true,
       breaks: 'auto',
       footer: 'none',
       header: 'none',
       pageMarginLeft: 60, pageMarginRight: 60, pageMarginTop: 60, pageMarginBottom: 60,
-      spacingStaff: 14,
       justifyVertically: false,
       svgViewBox: true,
       svgRemoveXlink: true,
@@ -318,8 +321,14 @@
       '<span>' + (score.composer ? '작곡 ' + esc(score.composer) : '') + '</span></div></div>';
   }
 
+  /** 가사 간격 슬라이더 → 가사를 아래로 내리는 양 (style.css 의 --lyric-drop) */
+  function applyLyricGap() {
+    document.documentElement.style.setProperty('--lyric-drop', Math.round(+$('lyricGap').value * 25) + 'px');
+  }
+
   async function render() {
     const tk = await tkReady;
+    applyLyricGap();
     const score = state.score;
     $('curKey').textContent = SM.parseKey(score.key).name;
     $('transKey').value = SM.parseKey(score.key).name;
@@ -640,6 +649,9 @@
     const rerender = () => { clearTimeout(rt); rt = setTimeout(() => { if (state.score) render(); }, 120); };
     $('zoom').addEventListener('input', rerender);
     $('lyricSize').addEventListener('input', rerender);
+    $('lyricGap').addEventListener('input', rerender);
+    $('lyricGap').value = LS.get('lyricGap', '4');
+    $('lyricGap').addEventListener('change', () => LS.set('lyricGap', $('lyricGap').value));
     window.addEventListener('resize', rerender);
     $('zoom').value = LS.get('zoom', '45');
     $('lyricSize').value = LS.get('lyricSize', '5');
