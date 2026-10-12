@@ -81,6 +81,7 @@ function noteRules_() {
     '  한 음절을 여러 음으로 끌 때(붙임줄·이음줄로 이어진 뒤 음표)는 가사를 넣지 않습니다.',
     '',
     '[구조]',
+    '- 줄의 첫 마디가 박자보다 짧은 못갖춘마디(곡이나 구간이 짧은 음표 몇 개로 시작)면 그 마디에 pickup: true.',
     '- 도돌이표: 시작 |: 은 repeatStart: true, 끝 :| 은 repeatEnd: true.',
     '- 1·2번 괄호: 괄호 안 마디마다 ending: "1" 또는 "2".',
     '- 겹세로줄은 barline: "double", 끝세로줄은 "final".',
@@ -141,7 +142,7 @@ function meta_(req) {
     parts.push({ text: '페이지 ' + (i + 1) + ':' });
     parts.push({ inline_data: { mime_type: p.mimeType || 'image/jpeg', data: p.data } });
   });
-  return callGemini_(parts, metaSchema_());
+  return callGemini_(parts, metaSchema_(), 'fast'); // 곡 정보는 간단해서 항상 빠르게
 }
 
 /* ── 2) 줄 단위 음표 읽기 ── */
@@ -179,6 +180,7 @@ function lineSchema_() {
           type: 'OBJECT',
           properties: {
             line: { type: 'INTEGER' },
+            pickup: { type: 'BOOLEAN' },
             repeatStart: { type: 'BOOLEAN' },
             repeatEnd: { type: 'BOOLEAN' },
             ending: { type: 'STRING' },
@@ -213,7 +215,6 @@ function lines_(req) {
   const ctx = [];
   if (hints.key) ctx.push('조: ' + hints.key + ' (조표는 이미 반영되니 pos 와 실제로 보이는 임시표만 적으세요)');
   if (hints.time) ctx.push('박자: ' + hints.time);
-  if (hints.pickup && nums[0] === 1) ctx.push('1번 줄 첫 마디는 못갖춘마디입니다.');
   const parts = [{ text: intro + '\n' + (ctx.length ? ctx.join('\n') + '\n' : '') + '\n' + noteRules_() }];
   if (req.page && !req.whole) {
     parts.push({ text: '페이지 전체 (참고용):' });
@@ -223,7 +224,7 @@ function lines_(req) {
     parts.push({ text: req.whole ? '페이지:' : '줄 ' + l.line + ':' });
     parts.push({ inline_data: { mime_type: l.mimeType || 'image/jpeg', data: l.data } });
   });
-  const out = callGemini_(parts, lineSchema_());
+  const out = callGemini_(parts, lineSchema_(), hints.speed);
   if (!req.whole) {
     // 줄 하나만 보냈으면 줄 번호는 우리가 확실히 앎
     if (lines.length === 1) (out.measures || []).forEach(function (m) { m.line = lines[0].line; });
@@ -232,7 +233,7 @@ function lines_(req) {
 }
 
 /* ── Gemini 호출 (한 번에 60초 안에 끝나야 함) ── */
-function callGemini_(parts, schema) {
+function callGemini_(parts, schema, speed) {
   const props = PropertiesService.getScriptProperties();
   const apiKey = props.getProperty('GEMINI_API_KEY');
   if (!apiKey) throw new Error('스크립트 속성에 GEMINI_API_KEY 가 없습니다.');
@@ -242,7 +243,8 @@ function callGemini_(parts, schema) {
     responseSchema: schema,
     maxOutputTokens: 32768,
   };
-  const thinking = props.getProperty('GEMINI_THINKING'); // 선택: low | high
+  // 빠르게: 생각 단계를 짧게 (훨씬 빠름). 꼼꼼하게: 모델 기본값(깊게 생각) 또는 GEMINI_THINKING
+  const thinking = speed === 'fast' ? 'low' : props.getProperty('GEMINI_THINKING');
   if (thinking) gen.thinkingConfig = { thinkingLevel: thinking };
 
   const url = 'https://generativelanguage.googleapis.com/v1beta/models/' +

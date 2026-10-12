@@ -146,19 +146,26 @@
       key: $('hintKey').value,
       time: $('hintTime').value,
       language: $('hintLang').value,
+      speed: $('hintSpeed').value,
     };
+    LS.set('speed', hints.speed);
+    const started = Date.now();
     const pages = state.uploads;
     const jobs = lineJobs(pages);
     const lineCount = pages.reduce((a, p) => a + p.systems.length, 0);
-    busy(true, '곡 정보를 읽는 중…');
+    busy(true, '악보를 읽는 중… 0/' + jobs.length + '줄');
     try {
-      const meta = (await api('meta', { pages: pages.map((p) => p.page), lineCount, hints })).meta;
+      // 곡 정보와 모든 줄을 한꺼번에 요청 (음높이는 오선 위치로 받으므로 조를 먼저 알 필요 없음)
+      const lineHints = { key: hints.key, time: hints.time, language: hints.language, speed: hints.speed };
+      const metaP = runPool([0], 1, async () => (await api('meta', { pages: pages.map((p) => p.page), lineCount, hints })).meta);
+      const linesP = runPool(jobs, Math.min(jobs.length, 10), async (job) =>
+        (await api('lines', Object.assign({ hints: lineHints }, job))).result,
+        (d, t) => busy(true, '악보를 읽는 중… ' + d + '/' + t + '줄'));
+      const [metaR, results] = await Promise.all([metaP, linesP]);
+      if (!metaR[0].ok) throw new Error(metaR[0].error);
+      const meta = metaR[0].value;
       const key = hints.key || meta.key;
       const time = hints.time || meta.time;
-      busy(true, '음표를 읽는 중… 0/' + jobs.length + '줄');
-      const results = await runPool(jobs, 4, async (job) =>
-        (await api('lines', Object.assign({ hints: { key, time, language: hints.language, pickup: meta.pickup } }, job))).result,
-        (d, t) => busy(true, '음표를 읽는 중… ' + d + '/' + t + '줄'));
 
       const measures = [];
       const warnings = [];
@@ -189,7 +196,8 @@
       $('origPane').hidden = false;
       $('stepEdit').scrollIntoView({ behavior: 'smooth' });
       const failed = results.filter((r) => !r.ok).length;
-      if (failed) toast(failed + '줄을 읽지 못했습니다. 노란 상자를 확인하세요.', 6000);
+      const secs = Math.round((Date.now() - started) / 1000);
+      toast(failed ? failed + '줄을 읽지 못했습니다. 노란 상자를 확인하세요. (' + secs + '초)' : secs + '초 걸렸습니다.', 6000);
     } catch (e) {
       toast('변환 실패: ' + e.message, 7000);
     } finally { busy(false); }
@@ -206,7 +214,7 @@
     busy(true, line + '번째 줄을 다시 읽는 중…');
     try {
       const s = state.score;
-      const r = (await api('lines', Object.assign({ hints: { key: s.key, time: s.time, pickup: line === 1 && s.measures[0].pickup } }, job))).result;
+      const r = (await api('lines', Object.assign({ hints: { key: s.key, time: s.time, speed: $('hintSpeed').value } }, job))).result;
       const fresh = { key: s.key, clef: s.clef, measures: (r.measures || []).map((m) => Object.assign(m, { line })) };
       SM.resolvePositions(fresh);
       pushUndo();
@@ -582,6 +590,7 @@
       state.uploads.splice(+b.dataset.i, 1); renderThumbs();
     });
     $('btnConvert').addEventListener('click', convert);
+    $('hintSpeed').value = LS.get('speed', 'fast');
 
     $('btnSample').addEventListener('click', async () => {
       try {
